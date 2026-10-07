@@ -1,6 +1,6 @@
 // Package vcp implements the client side of the Voiceline Call Protocol
 // (VCP): the encrypted custom protocol that caller applications — this
-// repo's desktop app, the website and the APK — use to place and receive
+// repo's website and the vcpc CLI — use to place and receive
 // calls through a Voiceline line registered against a SIP provider.
 //
 // The wire contract lives in proto/webcall.proto (vendored from the

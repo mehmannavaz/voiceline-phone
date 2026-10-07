@@ -1,16 +1,17 @@
 # Voiceline Phone
 
-The caller apps for the **Voiceline Call Protocol (VCP)** — the encrypted
+The caller client for the **Voiceline Call Protocol (VCP)** — the encrypted
 custom protocol that lets you place and receive real phone calls through a
 [Voiceline](https://github.com/mehmannavaz/voiceline) line registered at a
-SIP provider — from a **website**, an **Android APK**, a **Windows EXE**
-or a **Linux AppImage**. All four are the same Go client.
+SIP provider. The client is a **website** (the whole Go protocol core
+compiled to WebAssembly) plus **vcpc**, a headless CLI client — one lean
+codebase, no native packaging.
 
 ```
 ┌────────────────────┐   WebSocket (binary frames, AES-256-GCM)   ┌──────────┐
 │  voiceline-phone   │ ─────────────────────────────────────────▶ │ voiceline│
-│  web / apk / exe / │ ◀───────────────────────────────────────── │  server  │
-│  appimage          │        protobuf envelopes + PCM audio      │  :8086   │
+│  website (wasm) /  │ ◀───────────────────────────────────────── │  server  │
+│  vcpc (headless)   │        protobuf envelopes + PCM audio      │  :8086   │
 └────────────────────┘                                            └────┬─────┘
                                                                        │ SIP/RTP
                                                             ┌──────────▼─────────┐
@@ -23,9 +24,6 @@ or a **Linux AppImage**. All four are the same Go client.
 
 | Artifact | What it is |
 |---|---|
-| `voiceline-phone-windows-amd64.exe` | one-file Windows softphone (GUI subsystem, no console) |
-| `voiceline-phone-x86_64.AppImage` | one-file Linux AppImage (X11) |
-| `voiceline-phone-android.apk` | universal Android APK (arm, arm64, x86, x86_64) |
 | `voiceline-phone-web.zip` | the website — serve it from anywhere, zero install |
 | `vcpc-*` | headless CLI client (ops + integration testing, JSONL events) |
 | `webserve-*` | one-binary static server for the website |
@@ -41,8 +39,11 @@ Every form factor speaks the full protocol:
 - **DTMF** both ways, **blind transfer** to an outside number (you only
   type the number — the server assembles the SIP URI), **group calls**
   (add a person, everyone hears everyone).
-- **Real audio**: microphone and speakers at 8 kHz PCM16, mixed and
-  jitter-managed in every client.
+- **Broadcast-grade audio** (website): the browser's AEC/noise
+  suppression/AGC on the mic, a 6th-order anti-alias wall before the
+  8 kHz leg, an adaptive jitter buffer that hard-caps latency at 320 ms,
+  a zero-lookahead soft limiter, volume control and output-device
+  routing (headphones instead of the blaring speakers).
 - **Zero shared secrets on the wire**: per-connection random nonces,
   PBKDF2 key schedule, AES-256-GCM every frame, sequence enforcement.
 
@@ -63,8 +64,8 @@ Every form factor speaks the full protocol:
        call_password: <generate one in the console>
    ```
 
-2. Start the app (EXE / AppImage / APK), or unzip the website and run
-   `webserve`, then open `http://127.0.0.1:8090/`.
+2. Unzip the website and run `webserve`, then open
+   `http://127.0.0.1:8090/` (or serve `web/` from any static server).
 
 3. Fill in the server (`ws://your-server:8086/call`), line id and call
    password — and you have a phone. Check "Receive this line's calls here"
@@ -83,6 +84,30 @@ vcpc ... -dial 1002 -dtmf 12 -conf 1003 -transfer 1004   # the whole story
 ```
 
 Every event prints as one JSON line — scripts love it.
+
+## The website's audio pipeline
+
+The call quality work lives in `web/mic-worklet.js` and
+`web/playback-worklet.js` (AudioWorklets — the DSP runs on the browser's
+real-time audio thread, never on the main thread):
+
+- **Microphone**: mono mix → 140 Hz high-pass (rumble) → 3 cascaded
+  biquad low-passes at 3.4 kHz (a 6th-order Butterworth anti-alias wall —
+  without it everything above 4 kHz folds back into the voice band as
+  hiss) → drift-free fractional decimation to 8 kHz → 20 ms frames.
+- **Speaker**: 64 ms start watermark, 320 ms hard cap shedding the oldest
+  audio back to 120 ms on bursts — latency can never grow into seconds;
+  fractional linear resampling to the device rate; gain with a smooth
+  soft limiter (boosting a quiet caller can never clip or blast).
+- **Routing**: pick the output device (headphones!) and volume in the
+  audio bar; both persist. The live `jitter / dropped / gaps` readout
+  shows the connection health in real time.
+- Mute emits zero frames so the 20 ms cadence and the server pacer stay
+  in sync; a fresh call leg flushes stale audio and re-primes.
+
+`node scripts/worklet_test.mjs` verifies all of this numerically against
+the real worklet sources (rate accuracy, alias suppression, burst shed,
+limiter ceiling).
 
 ## The protocol in one screen
 
@@ -112,12 +137,10 @@ by `call_id` and are fully independent — the line is never "busy".
 proto/webcall.proto       the wire contract (vendored from voiceline)
 internal/vcp/             the protocol client (crypto, frames, session,
                           calls, inbound) — pure Go, builds everywhere
-internal/audioio/         microphone/speakers via miniaudio (malgo)
-internal/gui/             the Fyne desktop softphone (login → phone)
-cmd/phone/                the desktop+Android app entry point
 cmd/vcpc/                 the headless CLI client
 cmd/webserve/             static server for the website
 web/                      the website: Go core → phone.wasm + JS audio
+scripts/worklet_test.mjs  numerical verification of the audio DSP
 scripts/e2e.sh            end-to-end test vs a real voiceline + mockpbx
 scripts/e2e_web.sh        end-to-end test of the WASM website core
 ```
@@ -125,29 +148,16 @@ scripts/e2e_web.sh        end-to-end test of the WASM website core
 ## Building
 
 ```sh
-make test          # protocol unit tests (race detector on)
+make test          # protocol unit tests (race detector) + audio DSP tests
 make test-e2e      # boots voiceline + mockpbx and calls through VCP
 make linux         # Linux binaries → dist/
-make windows       # cross-compiles the EXE via zig
-make appimage      # Linux AppImage
+make windows       # Windows binaries (pure Go cross-compile, no cgo)
 make web           # website zip (WASM)
-make android       # APK (installs the Android SDK+NDK on demand)
 make dist          # everything + checksums
 ```
 
-Details — including the sandbox-friendly cgo header shim and the Android
-microphone permission note — live in [docs/BUILDING.md](docs/BUILDING.md).
-
-## Android note (microphone permission)
-
-The APK declares `RECORD_AUDIO`. Android 6+ also wants the grant at
-runtime, which a plain Go activity cannot prompt for — so the first run
-starts without microphone (a note says so; everything else works). Grant
-it once with adb and restart the app:
-
-```sh
-adb shell pm grant io.github.mehmannavaz.voicelinephone android.permission.RECORD_AUDIO
-```
+No cgo, no Android SDK, no system dependencies — any machine with Go
+1.27+ builds everything. Details in [docs/BUILDING.md](docs/BUILDING.md).
 
 ## Security notes
 

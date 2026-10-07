@@ -56,6 +56,13 @@
       <button id="disconnectBtn" class="chip">log out</button>
     </header>
 
+    <div class="audio-bar" title="call audio routing">
+      <select id="speaker" aria-label="audio output device"></select>
+      <input id="vol" type="range" min="0" max="3" step="0.05" value="1" aria-label="far-end volume">
+      <span id="volLabel" class="vol-label">100%</span>
+      <span id="audioStat" class="audio-stat">jitter — ms</span>
+    </div>
+
     <div id="incomingBanner" class="incoming" hidden>
       <div>
         <div class="who" id="incomingWho">incoming call</div>

@@ -1,6 +1,6 @@
 // Voiceline Call Protocol (VCP) — version 1.
 //
-// VCP lets caller applications (web, APK, EXE) use a Voiceline line that is
+// VCP lets caller applications (the web phone, vcpc) use a Voiceline line that is
 // registered against a SIP provider to place real outbound calls: the client
 // authenticates with the line id plus the line's randomly generated call
 // password, and from then on every message — signalling AND audio — flows

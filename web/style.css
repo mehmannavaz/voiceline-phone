@@ -114,6 +114,44 @@ header > div:first-child { flex: 1; min-width: 0; }
 .chip.danger { color: #fca5a5; border-color: rgba(220,38,38,.4); }
 .chip.on { color: #86efac; border-color: rgba(22,163,74,.5); }
 
+/* ── audio bar: output routing + volume + quality readout ── */
+.audio-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px;
+  margin-top: 10px;
+}
+.audio-bar select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  max-width: 46%;
+  min-width: 130px;
+}
+.audio-bar input[type="range"] { flex: 1; min-width: 90px; accent-color: var(--green); }
+.vol-label {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.audio-stat {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+
 /* ── incoming banner ───────────────────────────────────── */
 .incoming {
   display: flex;

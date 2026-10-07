@@ -18,7 +18,7 @@ type wsConn struct {
 func dialTransport(ctx context.Context, url string) (conn, error) {
 	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
 		// The line's call password IS the authentication; cross-origin
-		// clients (file:// pages, APKs, EXEs) are expected.
+		// clients (served pages, file:// pages) are expected.
 		HTTPHeader: nil,
 	})
 	if err != nil {

@@ -13,6 +13,10 @@ const state = {
   micNode: null,
   ringOsc: null,
   vcpReady: false,
+  vol: 1.0,              // far-end volume 0..3 (1.0 = natural level)
+  stats: { ms: 0, dropped: 0, underruns: 0 },
+  framesIn: 0,
+  framesOut: 0,
 };
 
 // ── persistence ──────────────────────────────────────────
@@ -37,6 +41,7 @@ window.addEventListener("load", () => {
 
   buildKeypad();
   bindEvents();
+  restoreVolume();
 
   const go = new Go();
   WebAssembly.instantiateStreaming(fetch("phone.wasm"), go.importObject)
@@ -137,10 +142,14 @@ function bindEvents() {
   });
   $("muteBtn").addEventListener("click", () => {
     state.muted = !state.muted;
-    window.VCP.setMicOn(!state.muted);
+    // The worklet emits zero frames while muted, so the 20 ms cadence,
+    // sequence numbers and the server pacer all stay in sync.
+    if (state.micNode) state.micNode.port.postMessage({ mute: state.muted });
     $("muteBtn").textContent = state.muted ? "🎙 off" : "🎙 on";
     $("muteBtn").classList.toggle("on", !state.muted);
   });
+  $("vol").addEventListener("input", () => setVolume(parseFloat($("vol").value), true));
+  $("speaker").addEventListener("change", () => setSink($("speaker").value, true));
   $("hangAllBtn").addEventListener("click", () => {
     for (const [id, s] of state.calls) {
       if (isLive(s)) window.VCP.hangup(id);
@@ -188,8 +197,14 @@ function hookLabel(h) {
 }
 
 function cbCall(s) {
+  const prev = state.calls.get(s.id);
   state.calls.set(s.id, s);
   if (s.state === "ended" || s.state === "failed") stopRing();
+  // Entering the answered phase: flush any stale buffered audio and
+  // re-prime the jitter buffer for a clean, low-latency start.
+  if (s.state === "answered" && (!prev || prev.state !== "answered") && state.playNode) {
+    state.playNode.port.postMessage({ flush: true });
+  }
   renderCalls();
 }
 
@@ -221,7 +236,10 @@ function cbConference(p) {
 function cbBye(reason) { note(`server closed the session: ${reason}`); }
 
 function cbAudio(callID, pcm) {
-  if (state.playNode) state.playNode.port.postMessage({ pcm });
+  if (state.playNode) {
+    state.playNode.port.postMessage({ pcm });
+    state.framesIn++;
+  }
 }
 
 // ── calls rendering ──────────────────────────────────────
@@ -382,7 +400,9 @@ function note(msg) {
 async function startAudio() {
   if (state.audioCtx) return;
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    // "interactive" = the smallest buffer the device allows: keeps the
+    // end-to-end path at tens of milliseconds instead of hundreds.
+    const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
     await ctx.resume();
     await ctx.audioWorklet.addModule("playback-worklet.js");
     await ctx.audioWorklet.addModule("mic-worklet.js");
@@ -391,19 +411,38 @@ async function startAudio() {
       numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1],
     });
     playNode.connect(ctx.destination);
+    playNode.port.postMessage({ gain: state.vol });
+    playNode.port.onmessage = (e) => {
+      if (e.data && e.data.ms !== undefined) state.stats = e.data;
+    };
 
     let micNode = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
+      // The browser's own AEC / noise suppression / AGC run on this
+      // track; the worklet adds the anti-alias wall for the 8 kHz leg.
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+          },
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
       const src = ctx.createMediaStreamSource(stream);
       micNode = new AudioWorkletNode(ctx, "mic-processor", {
         numberOfInputs: 1, numberOfOutputs: 0,
       });
       micNode.port.onmessage = (e) => {
-        if (e.data && e.data.pcm && !state.muted) {
+        if (e.data && e.data.pcm) {
+          // Mute is applied inside the worklet (zero frames), so this
+          // always forwards — cadence and sequence numbers stay honest.
           window.VCP.mic(e.data.pcm);
+          state.framesOut++;
         }
       };
       src.connect(micNode);
@@ -414,19 +453,97 @@ async function startAudio() {
     state.audioCtx = ctx;
     state.playNode = playNode;
     state.micNode = micNode;
-    window.VCP.setMicOn(true);
+    if (state.muted && micNode) micNode.port.postMessage({ mute: true });
+    await refreshSpeakers(); // labels exist once mic permission is granted
+    await restoreSink();     // route to the saved headphones/handset
   } catch (err) {
     note("audio failed to start: " + err.message);
   }
 }
+
+// ── volume: far-end loudness, natural level by default ───
+function setVolume(v, save) {
+  if (!isFinite(v)) v = 1;
+  state.vol = Math.max(0, Math.min(3, v));
+  $("vol").value = String(state.vol);
+  $("volLabel").textContent = Math.round(state.vol * 100) + "%";
+  if (state.playNode) state.playNode.port.postMessage({ gain: state.vol });
+  if (save) { try { localStorage.setItem("vlphone.vol", String(state.vol)); } catch {} }
+}
+function restoreVolume() {
+  let v = 1.0;
+  try { const s = parseFloat(localStorage.getItem("vlphone.vol")); if (s >= 0 && s <= 3) v = s; } catch {}
+  setVolume(v, false);
+}
+
+// ── output device: route the call to headphones, not the blaring speakers
+async function refreshSpeakers() {
+  const sel = $("speaker");
+  const ctx = state.audioCtx;
+  if (!sel || !ctx) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices ||
+      typeof ctx.setSinkId !== "function") {
+    sel.closest(".audio-bar").hidden = true;
+    return;
+  }
+  let devs = [];
+  try { devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audiooutput"); } catch {}
+  const saved = sel.value || "";
+  sel.innerHTML = "";
+  const def = document.createElement("option");
+  def.value = "";
+  def.textContent = "🔊 default output";
+  sel.appendChild(def);
+  for (const d of devs) {
+    const o = document.createElement("option");
+    o.value = d.deviceId;
+    o.textContent = "🎧 " + (d.label || "output " + sel.length);
+    sel.appendChild(o);
+  }
+  sel.value = saved && [...sel.options].some(o => o.value === saved) ? saved : "";
+}
+
+async function setSink(id, save) {
+  const ctx = state.audioCtx;
+  if (!ctx || typeof ctx.setSinkId !== "function") return;
+  try {
+    await ctx.setSinkId(id);
+    if (save) { try { localStorage.setItem("vlphone.sink", id); } catch {} }
+  } catch (err) {
+    note("could not switch the audio output: " + err.message);
+  }
+}
+async function restoreSink() {
+  const ctx = state.audioCtx;
+  if (!ctx || typeof ctx.setSinkId !== "function") return;
+  let id = "";
+  try { id = localStorage.getItem("vlphone.sink") || ""; } catch {}
+  if (id) {
+    await setSink(id, false);
+    const sel = $("speaker");
+    if (sel && [...sel.options].some(o => o.value === id)) sel.value = id;
+  }
+}
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", () => { refreshSpeakers(); });
+}
+
+// live connection-quality readout
+setInterval(() => {
+  const el = $("audioStat");
+  if (!el) return;
+  const s = state.stats;
+  el.textContent = `jitter ${s.ms} ms · dropped ${s.dropped} · gaps ${s.underruns}`;
+}, 500);
 
 // ── ringtone (two classic tones, oscillator-based) ───────
 function startRing() {
   stopRing();
   if (!state.audioCtx) return;
   const ctx = state.audioCtx;
+  const ringGain = 0.12 * Math.min(1, state.vol); // follows the volume slider
   const gain = ctx.createGain();
-  gain.gain.value = 0.12;
+  gain.gain.value = ringGain;
   gain.connect(ctx.destination);
   const o1 = ctx.createOscillator();
   o1.frequency.value = 440;
@@ -435,12 +552,12 @@ function startRing() {
   o1.connect(gain); o2.connect(gain);
 
   const t = ctx.currentTime;
-  gain.gain.setValueAtTime(0.12, t);
-  gain.gain.setValueAtTime(0.12, t + 1.0);
+  gain.gain.setValueAtTime(ringGain, t);
+  gain.gain.setValueAtTime(ringGain, t + 1.0);
   gain.gain.setValueAtTime(0.0, t + 1.02);
   gain.gain.setValueAtTime(0.0, t + 2.98);
-  gain.gain.setValueAtTime(0.12, t + 3.0);
-  gain.gain.setValueAtTime(0.12, t + 4.0);
+  gain.gain.setValueAtTime(ringGain, t + 3.0);
+  gain.gain.setValueAtTime(ringGain, t + 4.0);
   gain.gain.setValueAtTime(0.0, t + 4.02);
 
   o1.start(); o2.start();
@@ -449,12 +566,12 @@ function startRing() {
     if (!state.ringOsc) return;
     const t2 = ctx.currentTime;
     const g = state.ringOsc.gain.gain;
-    g.setValueAtTime(0.12, t2);
-    g.setValueAtTime(0.12, t2 + 1.0);
+    g.setValueAtTime(ringGain, t2);
+    g.setValueAtTime(ringGain, t2 + 1.0);
     g.setValueAtTime(0.0, t2 + 1.02);
     g.setValueAtTime(0.0, t2 + 2.98);
-    g.setValueAtTime(0.12, t2 + 3.0);
-    g.setValueAtTime(0.12, t2 + 4.0);
+    g.setValueAtTime(ringGain, t2 + 3.0);
+    g.setValueAtTime(ringGain, t2 + 4.0);
     g.setValueAtTime(0.0, t2 + 4.02);
   }, 6000);
 }
