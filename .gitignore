@@ -1,0 +1,7 @@
+dist/
+cmd/webserve/site/
+web/phone.wasm
+web/wasm_exec.js
+web/icon.png
+*.apk
+*.AppImage

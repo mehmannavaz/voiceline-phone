@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Voiceline Phone</title>
+<link rel="icon" href="icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ═══════════ login ═══════════ -->
+  <section id="login" class="screen">
+    <div class="brand">
+      <div class="logo">☎</div>
+      <h1>Voiceline Phone</h1>
+      <p class="tag">the encrypted call protocol client</p>
+    </div>
+    <form id="loginForm" autocomplete="on">
+      <label>Server
+        <input id="server" type="text" placeholder="ws://192.168.1.7:8086/call" spellcheck="false">
+      </label>
+      <label>Line
+        <input id="line" type="text" placeholder="line id" spellcheck="false" autocomplete="off">
+      </label>
+      <label>Call password
+        <input id="password" type="password" placeholder="line call password" autocomplete="current-password">
+      </label>
+      <label>Display name
+        <input id="display" type="text" placeholder="shown to callees (optional)">
+      </label>
+      <label class="check">
+        <input id="receive" type="checkbox" checked>
+        <span>Receive this line's calls here (rings)</span>
+      </label>
+      <label class="check">
+        <input id="keep" type="checkbox">
+        <span>Remember on this device</span>
+      </label>
+      <button id="connectBtn" class="primary big" type="submit">Connect</button>
+      <div id="loginStatus" class="status" hidden></div>
+    </form>
+  </section>
+
+  <!-- ═══════════ phone ═══════════ -->
+  <section id="phone" class="screen" hidden>
+    <header>
+      <div>
+        <div id="lineNumber" class="line-number">…</div>
+        <div id="lineStat" class="line-stat">connecting…</div>
+      </div>
+      <button id="muteBtn" class="chip" title="microphone">🎙 on</button>
+      <button id="hangAllBtn" class="chip danger">end all</button>
+      <button id="disconnectBtn" class="chip">log out</button>
+    </header>
+
+    <div id="incomingBanner" class="incoming" hidden>
+      <div>
+        <div class="who" id="incomingWho">incoming call</div>
+        <div class="hint" id="incomingHint">ring window</div>
+      </div>
+      <div class="row">
+        <button id="acceptBtn" class="primary">Accept</button>
+        <button id="rejectBtn" class="danger">Reject</button>
+      </div>
+    </div>
+
+    <div class="dialer">
+      <input id="number" type="tel" placeholder="number to call" spellcheck="false" autocomplete="off">
+      <div id="keypad" class="keypad"></div>
+      <button id="callBtn" class="primary big">CALL</button>
+    </div>
+
+    <div id="calls" class="calls"></div>
+    <div id="note" class="note" hidden></div>
+  </section>
+</div>
+
+<script src="wasm_exec.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

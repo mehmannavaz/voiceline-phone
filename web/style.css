@@ -1,0 +1,214 @@
+:root {
+  --bg: #0b1220;
+  --panel: #111827;
+  --panel-2: #1f2937;
+  --line: #263244;
+  --text: #e5e7eb;
+  --muted: #94a3b8;
+  --green: #16a34a;
+  --green-2: #22c55e;
+  --red: #dc2626;
+  --amber: #f59e0b;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: radial-gradient(1200px 600px at 50% -10%, #14263f 0%, var(--bg) 60%);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+#app {
+  max-width: 430px;
+  margin: 0 auto;
+  padding: 16px 14px 32px;
+}
+
+.screen { display: flex; flex-direction: column; gap: 14px; }
+
+/* ── login ─────────────────────────────────────────────── */
+.brand { text-align: center; margin-top: 28px; }
+.logo {
+  width: 84px; height: 84px; margin: 0 auto 10px;
+  border-radius: 26px;
+  background: linear-gradient(160deg, var(--green-2), #15803d);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 44px;
+  box-shadow: 0 12px 32px rgba(22, 163, 74, .35);
+}
+.brand h1 { margin: 0; font-size: 26px; letter-spacing: .3px; }
+.brand .tag { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+
+form {
+  display: flex; flex-direction: column; gap: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 20px;
+}
+label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+input[type="text"], input[type="password"], input[type="tel"] {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-size: 15px;
+  outline: none;
+}
+input:focus { border-color: var(--green); }
+label.check { flex-direction: row; align-items: center; gap: 10px; color: var(--text); }
+label.check input { width: 18px; height: 18px; accent-color: var(--green); }
+
+button {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--panel-2);
+  color: var(--text);
+}
+button:active { transform: translateY(1px); }
+button.primary { background: var(--green); color: #06130a; }
+button.primary:hover { background: var(--green-2); }
+button.danger { background: var(--red); color: #fff; }
+button.big { padding: 14px; font-size: 17px; }
+button:disabled { opacity: .55; cursor: wait; }
+
+.status {
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  background: rgba(220, 38, 38, .12);
+  border: 1px solid rgba(220, 38, 38, .4);
+  color: #fca5a5;
+}
+
+/* ── phone header ──────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px 14px;
+}
+header > div:first-child { flex: 1; min-width: 0; }
+.line-number { font-size: 19px; font-weight: 700; }
+.line-stat { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.chip {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+.chip.danger { color: #fca5a5; border-color: rgba(220,38,38,.4); }
+.chip.on { color: #86efac; border-color: rgba(22,163,74,.5); }
+
+/* ── incoming banner ───────────────────────────────────── */
+.incoming {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: linear-gradient(140deg, rgba(22,163,74,.22), rgba(22,163,74,.08));
+  border: 1px solid rgba(22,163,74,.55);
+  border-radius: 16px;
+  padding: 14px;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.incoming > div:first-child { flex: 1; }
+.incoming .who { font-size: 17px; font-weight: 700; }
+.incoming .hint { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.incoming .row { display: flex; gap: 8px; }
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22,163,74,.35); }
+  50% { box-shadow: 0 0 0 10px rgba(22,163,74,0); }
+}
+
+/* ── dialer ────────────────────────────────────────────── */
+.dialer {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dialer input {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 13px 14px;
+  font-size: 19px;
+  text-align: center;
+  letter-spacing: 1px;
+  outline: none;
+}
+.keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.keypad button {
+  font-size: 20px;
+  padding: 13px 0;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  font-weight: 500;
+}
+.keypad button:hover { border-color: var(--green); }
+.keypad button small { display: block; font-size: 9px; color: var(--muted); letter-spacing: 1.5px; }
+
+/* ── calls ─────────────────────────────────────────────── */
+.calls { display: flex; flex-direction: column; gap: 10px; }
+.call {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 13px 14px;
+}
+.call.live { border-color: rgba(22,163,74,.55); }
+.call.incoming-card { border-color: rgba(245,158,11,.6); }
+.call-head { display: flex; align-items: baseline; gap: 10px; }
+.call-who { font-size: 17px; font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-dur { font-family: ui-monospace, monospace; color: var(--green-2); font-size: 15px; }
+.call-state { color: var(--muted); font-size: 12.5px; margin: 3px 0 10px; }
+.call-state.failed { color: #fca5a5; }
+.call-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.call-actions button { flex: 1; min-width: 84px; }
+.call-actions .ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+
+.empty { color: var(--muted); text-align: center; padding: 22px 0; font-size: 14px; }
+
+/* ── note ──────────────────────────────────────────────── */
+.note {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 12px;
+  font-size: 12.5px;
+  padding: 10px 12px;
+}
+
+/* ── dtmf sheet ────────────────────────────────────────── */
+.sheet {
+  position: fixed; inset: 0;
+  background: rgba(4, 8, 16, .6);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.sheet .inner {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 22px 22px 0 0;
+  padding: 18px;
+  width: 100%;
+  max-width: 430px;
+}

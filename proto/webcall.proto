@@ -1,0 +1,334 @@
+// Voiceline Call Protocol (VCP) — version 1.
+//
+// VCP lets caller applications (web, APK, EXE) use a Voiceline line that is
+// registered against a SIP provider to place real outbound calls: the client
+// authenticates with the line id plus the line's randomly generated call
+// password, and from then on every message — signalling AND audio — flows
+// encrypted over a single WebSocket.
+//
+// Transport: WebSocket (ws://host:8086/call), binary messages only.
+//
+//   1. PLAINTEXT handshake (two protobuf messages, no encryption yet):
+//        client  -> HelloRequest { version, line_id, client_nonce }
+//        server  -> HelloResponse { version, server_nonce }   (error set => close)
+//
+//   2. KEY SCHEDULE (both sides, no exchange beyond the two nonces):
+//        master   = PBKDF2-HMAC-SHA256(password,
+//                                       salt = client_nonce || server_nonce,
+//                                       iterations = 60000, length = 96)
+//        client_write_key = master[ 0:32]     // client -> server AES-256-GCM
+//        server_write_key = master[32:64]     // server -> client AES-256-GCM
+//        auth_key         = master[64:96]     // HMAC-SHA256 handshake proof
+//
+//   3. AUTH (first encrypted frame in each direction, sequence 0):
+//        client  -> Envelope{ AuthConfirm {
+//            proof = HMAC-SHA256(auth_key,
+//                       "VCP/1 client|" || line_id || "|" ||
+//                       client_nonce || "|" || server_nonce) } }
+//        server  -> Envelope{ AuthResult{ ok, error, line } }
+//        (ok = false => the server sends Bye and closes)
+//
+//   4. SESSION: every WebSocket binary message after the handshake is
+//        [ 8-byte big-endian sequence ][ AES-256-GCM ciphertext ][ 16-byte tag ]
+//      with nonce = 00 00 00 00 || sequence (8-byte big endian). The sequence
+//      strictly increases by one per direction; anything else is a protocol
+//      error and the connection drops. The decrypted plaintext is exactly one
+//      serialized Envelope message.
+//
+// Audio is PCM16 little-endian, 8000 Hz, mono, 20 ms frames (160 samples =
+// 320 bytes per AudioFrame). The server transcodes to the SIP leg's codec
+// (G.711 μ-law/A-law). One line can carry many simultaneous calls — calls are
+// independent SIP dialogs and never make the line "busy"; the optional
+// max_concurrent line limit is the only bound (0 = unlimited).
+syntax = "proto3";
+
+package voiceline.webcall.v1;
+
+option go_package = "github.com/mehmannavaz/voiceline-phone/internal/vcp/pb;webcallpb";
+
+// ── handshake (plaintext) ────────────────────────────────────────────────
+
+message HelloRequest {
+  // Protocol version the client speaks (currently 1).
+  uint32 version = 1;
+  // Id of the Voiceline line to call through (as shown in the console).
+  string line_id = 2;
+  // 16 fresh random bytes, unique per connection attempt.
+  bytes client_nonce = 3;
+}
+
+message HelloResponse {
+  // Protocol version the server picked (currently 1).
+  uint32 version = 1;
+  // 16 fresh random bytes from the server.
+  bytes server_nonce = 2;
+  // Non-empty when the handshake cannot proceed (unknown line, no call
+  // password set, unsupported version). The server closes right after.
+  string error = 3;
+}
+
+// ── encrypted session messages ───────────────────────────────────────────
+
+// Envelope is the plaintext carried by every encrypted frame: exactly one of
+// these messages, serialized.
+message Envelope {
+  oneof payload {
+    AuthConfirm   auth_confirm = 10;
+    AuthResult    auth_result  = 11;
+    DialRequest   dial         = 12;
+    CallEvent     call_event   = 13;
+    HangupRequest hangup       = 14;
+    DtmfRequest   dtmf         = 15;
+    DtmfEvent     dtmf_event   = 16;
+    MediaStart    media_start  = 17;
+    AudioFrame    audio        = 18;
+    Ping          ping         = 19;
+    Pong          pong         = 20;
+    Bye           bye          = 21;
+    // v1.1 additions (a v1 server MUST ignore unknown oneof members —
+    // older clients simply never send these).
+    TransferRequest transfer    = 30;
+    TransferEvent   transfer_ev = 31;
+    ConferenceInvite conf_invite = 32;
+    ConferenceEvent  conf_event  = 33;
+    // v1.2 additions — incoming calls delivered to the client (same rule:
+    // unknown members are ignored by older peers).
+    InboundSubscription inbound_sub = 34; // client -> server
+    InboundAck          inbound_ack = 35; // server -> client
+    IncomingCallEvent   incoming     = 36; // server -> client
+    AcceptRequest       accept       = 37; // client -> server
+    RejectRequest       reject       = 38; // client -> server
+  }
+}
+
+// AuthConfirm is the client's encrypted reply proving it knows the line's
+// call password.
+message AuthConfirm {
+  // HMAC-SHA256(auth_key, "VCP/1 client|" + line_id + "|" +
+  // client_nonce + "|" + server_nonce).
+  bytes proof = 1;
+  // Human-friendly caller name (optional, shown to the callee when the
+  // provider supports display names).
+  string display_name = 2;
+  // Free-form client identification, e.g. "webcaller/1.0 (chrome/120)".
+  string user_agent = 3;
+}
+
+// AuthResult concludes the handshake.
+message AuthResult {
+  bool ok = 1;
+  // Failure reason when ok is false.
+  string error = 2;
+  // Snapshot of the line this session is bound to.
+  LineInfo line = 3;
+}
+
+// LineInfo describes the bound line.
+message LineInfo {
+  string id = 1;
+  // SIP user of the line: the number the callee sees as caller id.
+  string number = 2;
+  string display_name = 3;
+  // Registration lifecycle: registering / registered / failed / stopped.
+  string reg_state = 4;
+  bool registered = 5;
+  // Operator view: on_hook (registered, idle), off_hook (registered, call up),
+  // disconnected (no registration).
+  string hook = 6;
+  // Calls currently active on the line (all sessions combined).
+  uint32 active_calls = 7;
+  // Configured concurrency bound; 0 = unlimited (the default).
+  uint32 max_concurrent = 8;
+}
+
+// DialRequest places an outbound call through the line.
+message DialRequest {
+  // Destination: a plain number ("17005554117"), a registered extension
+  // ("1001") or a full SIP URI ("sip:user@host").
+  string to = 1;
+  // Optional caller-id display-name override for this call.
+  string display_name = 2;
+  // Seconds to wait for an answer (0 = server default, 60).
+  uint32 timeout_sec = 3;
+}
+
+// CallEvent reports call progress. The first event after a DialRequest is
+// always state "dialing" carrying the call_id the client uses for hangup,
+// DTMF and audio frames.
+message CallEvent {
+  string call_id = 1;
+  // dialing | ringing | answered | ended | failed
+  string state = 2;
+  // Human-readable detail: SIP response text, end reason, reject cause.
+  string detail = 3;
+  // Unix milliseconds when the call was answered (0 until then).
+  uint64 answered_at_ms = 4;
+  // Duration of the answered phase in milliseconds (ended events).
+  uint32 duration_ms = 5;
+}
+
+message HangupRequest {
+  string call_id = 1;
+}
+
+// DtmfRequest sends one digit toward the callee (RFC 4733 out-of-band,
+// SIP INFO fallback).
+message DtmfRequest {
+  string call_id = 1;
+  // One of 0-9, *, #, A-D.
+  string digit = 2;
+  // Key press duration in ms (0 = 100).
+  uint32 duration_ms = 3;
+}
+
+// DtmfEvent reports a digit received from the callee.
+message DtmfEvent {
+  string call_id = 1;
+  string digit = 2;
+  // Detection method: rfc4733 or inband.
+  string method = 3;
+}
+
+// MediaStart announces the audio format for one call, right before its first
+// AudioFrame flows. Sent by the server after the call is answered.
+message MediaStart {
+  string call_id = 1;
+  // Audio codec of the frames: "L16" (PCM16) in v1.
+  string codec = 2;
+  uint32 sample_rate = 3; // 8000
+  uint32 frame_ms = 4;    // 20
+}
+
+// AudioFrame carries one packet of phone audio, both directions. Timestamps
+// advance by 160 per frame at 20 ms / 8 kHz.
+message AudioFrame {
+  string call_id = 1;
+  // Per-call monotonic frame counter.
+  uint32 seq = 2;
+  // RTP-style sample timestamp (wraps at 2^32).
+  uint32 timestamp = 3;
+  // PCM16 little-endian samples, 8000 Hz mono.
+  bytes pcm = 4;
+}
+
+message Ping {
+  uint64 nonce = 1;
+}
+
+message Pong {
+  uint64 nonce = 1;
+}
+
+// Bye closes the session gracefully (also used for protocol errors).
+// ── transfer: connect the caller to an outside number (v1.1) ────────────
+
+// TransferRequest connects the far party of an answered call to an
+// outside number dialed through the same line, then releases the client:
+// the two remote parties keep talking, the operator is free. The server
+// presents the ORIGINAL caller's number to the outside party when the
+// provider allows it (falling back to the line's own number).
+message TransferRequest {
+  // The answered call to transfer away.
+  string call_id = 1;
+  // Destination: a plain number ("+98922222222") or full SIP URI.
+  string to = 2;
+}
+
+// TransferEvent reports transfer progress.
+message TransferEvent {
+  string call_id = 1;
+  // dialing | answered | failed
+  string state = 2;
+  // Human detail: the dialed number, or the failure reason. On "failed"
+  // the original call survives untouched.
+  string detail = 3;
+}
+
+// ── conference: add a person to the call (v1.1) ─────────────────────────
+
+// ConferenceInvite dials another person and merges them with the existing
+// call into one mixed group call: everyone hears everyone. The new leg is
+// a normal call (its own call_id, lifecycle events and CDR); hanging it
+// up removes just that participant. When the client hangs up the anchor
+// call it leaves the room — the remaining parties keep talking.
+message ConferenceInvite {
+  // The answered call that becomes the group call.
+  string call_id = 1;
+  // Who to dial into the room.
+  string to = 2;
+  // Optional display name for the new participant.
+  string display_name = 3;
+}
+
+// ConferenceEvent reports group-call membership changes.
+message ConferenceEvent {
+  // The anchor call id (the room).
+  string call_id = 1;
+  // Remote identity of the participant that joined or left.
+  string participant = 2;
+  // joined | left
+  string action = 3;
+  // Headcount after the change (including the client).
+  uint32 participants = 4;
+}
+
+message Bye {
+  string reason = 1;
+  // 1 auth_failed, 2 line_unknown, 3 line_no_password, 4 version_mismatch,
+  // 5 protocol_error, 6 server_shutdown, 7 idle_timeout
+  uint32 code = 2;
+}
+
+// ── incoming calls: receiving calls on the client (v1.2) ────────────────
+//
+// A client that wants to RECEIVE calls subscribes after login. When a call
+// then arrives at the line (someone dialed the line's number), the server
+// offers it to the subscribed client instead of running the line's flow:
+// the caller hears ringback while the client rings, and Accept/Reject (or
+// the ring window expiring) decides the call.
+
+// InboundSubscription toggles incoming-call delivery for this session.
+message InboundSubscription {
+  // true = deliver incoming calls to this client; false = stop.
+  bool want = 1;
+}
+
+// InboundAck confirms a subscription change took effect.
+message InboundAck {
+  // The now-current subscription state.
+  bool want = 1;
+  // Non-empty when the subscription could not be changed.
+  string error = 2;
+}
+
+// IncomingCallEvent announces a call that arrived at the line. The client
+// answers with AcceptRequest or RejectRequest before the ring window
+// closes; after that the call is released as missed. While the offer is
+// pending the caller hears ringback.
+message IncomingCallEvent {
+  // The id the client uses to accept, reject or (once accepted) hang up.
+  string call_id = 1;
+  // Caller identity: SIP From user part ("15005554117").
+  string from = 2;
+  // Caller display name when the provider sent one.
+  string from_display = 3;
+  // Dialed destination (the line's number or extension).
+  string to = 4;
+  // Seconds the client has to accept (informational; server-enforced).
+  uint32 ring_sec = 5;
+}
+
+// AcceptRequest picks up an announced incoming call. From then on the call
+// behaves exactly like an answered outbound call: CallEvent "answered",
+// MediaStart, bidirectional AudioFrames, DTMF, transfer and conference.
+message AcceptRequest {
+  string call_id = 1;
+}
+
+// RejectRequest declines an announced incoming call (the caller is hung
+// up on; the client keeps its other calls).
+message RejectRequest {
+  string call_id = 1;
+  // Optional reason, logged and shown in the call detail ("busy", ...).
+  string reason = 2;
+}

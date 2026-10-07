@@ -1,0 +1,12 @@
+{
+  "name": "Voiceline Phone",
+  "short_name": "Voiceline",
+  "description": "Encrypted call protocol client — call and receive through your Voiceline line.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#16a34a",
+  "icons": [
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
